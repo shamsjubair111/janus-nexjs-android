@@ -1,17 +1,22 @@
 package com.example.videocallapp;
 
+import android.util.Log;
+
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.net.URI;
-import java.util.Random;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 public class JanusWebSocketClient extends WebSocketClient {
-    private JanusListener listener;
-    private String sessionId;
-    private String handleId;
+    private static final String TAG = "JanusWebSocketClient";
+    private static final int CONNECTION_TIMEOUT = 10000; // 10 seconds timeout
+    private static boolean alreadySent = false;
 
     public interface JanusListener {
         void onJanusConnected();
@@ -20,55 +25,118 @@ public class JanusWebSocketClient extends WebSocketClient {
         void onJanusEvent(JSONObject event);
     }
 
-    public JanusWebSocketClient(URI serverUri, JanusListener listener) {
-        super(serverUri);
+    private JanusListener listener;
+    private String sessionId;
+    private String handleId;
+    private String pendingUsername;
+    private boolean isSessionCreated = false;
+    private boolean isPluginAttached = false;
+
+    public JanusWebSocketClient(URI serverUri, JanusListener listener, Map<String, String> httpHeaders) {
+        super(serverUri, httpHeaders);
         this.listener = listener;
+        setConnectionLostTimeout(30); // 60 seconds ping interval
     }
 
     @Override
     public void onOpen(ServerHandshake handshakedata) {
+        Log.d(TAG, "WebSocket connected, handshake: " + handshakedata.getHttpStatus());
         listener.onJanusConnected();
-        createSession();
+        createSession(); // Start Janus session creation
     }
 
     @Override
     public void onMessage(String message) {
+        Log.d(TAG, "Received: " + message);
         try {
             JSONObject json = new JSONObject(message);
-            listener.onJanusEvent(json);
-
-            if (json.has("janus")) {
-                String janus = json.getString("janus");
-
-                if (janus.equals("success")) {
-                    if (json.has("data") && json.getJSONObject("data").has("id")) {
-                        sessionId = json.getJSONObject("data").getString("id");
-                        attachPlugin();
-                    } else if (json.has("plugindata")) {
-                        JSONObject plugindata = json.getJSONObject("plugindata");
-                        if (plugindata.has("data") && plugindata.getJSONObject("data").has("id")) {
-                            handleId = plugindata.getJSONObject("data").getString("id");
-                        }
-                    }
-                }
-            }
+            processJanusMessage(json); // Process all Janus messages
+            listener.onJanusEvent(json); // Forward to listener
         } catch (JSONException e) {
             listener.onJanusError("JSON parsing error: " + e.getMessage());
         }
     }
 
+    private void processJanusMessage(JSONObject json) throws JSONException {
+        if (!json.has("janus")) return;
+
+        String janus = json.getString("janus");
+        switch (janus) {
+            case "success":
+                Log.e("Janus Debug",json.toString());
+                handleSuccessResponse(json);
+                break;
+            case "error":
+                handleErrorResponse(json);
+                break;
+            case "event":
+                // Events are handled by the listener
+                break;
+        }
+    }
+
+    private void handleSuccessResponse(JSONObject json) throws JSONException {
+        if (json.has("data") && json.getJSONObject("data").has("id")) {
+            // Session created successfully
+            sessionId = json.getJSONObject("data").getString("id");
+            isSessionCreated = true;
+            Log.d(TAG, "Session created: " + sessionId);
+            if(!alreadySent){
+                attachPlugin(); // Proceed to attach plugin
+                alreadySent = true;
+            }
+
+        } else if (json.has("plugindata")) {
+            // Plugin attached successfully
+            JSONObject plugindata = json.getJSONObject("plugindata");
+            if (plugindata.getJSONObject("data").has("id")) {
+                handleId = plugindata.getJSONObject("data").getString("id");
+                isPluginAttached = true;
+                Log.d(TAG, "Plugin attached, handle ID: " + handleId);
+                if (pendingUsername != null) {
+                    register(pendingUsername); // Process pending registration
+                    pendingUsername = null;
+                }
+            }
+        }
+    }
+
+    private void handleErrorResponse(JSONObject json) throws JSONException {
+        String error = json.optString("error", "Unknown error");
+        String reason = json.getJSONObject("error").optString("reason", "No reason provided");
+        String errorMsg = "Janus error (" + error + "): " + reason;
+        Log.e(TAG, errorMsg);
+        listener.onJanusError(errorMsg);
+    }
+
     @Override
     public void onClose(int code, String reason, boolean remote) {
+        Log.d(TAG, "WebSocket closed. Code: " + code + ", Reason: " + reason);
+        resetState();
         listener.onJanusDisconnected();
     }
 
     @Override
     public void onError(Exception ex) {
-        listener.onJanusError(ex.getMessage());
+        String errorMsg = "WebSocket error: " + ex.getMessage();
+        Log.e(TAG, errorMsg, ex);
+        listener.onJanusError(errorMsg);
+    }
+
+    public void connectWithTimeout() throws Exception {
+        super.connectBlocking(CONNECTION_TIMEOUT, TimeUnit.MILLISECONDS);
+    }
+
+    private void resetState() {
+        sessionId = null;
+        handleId = null;
+        isSessionCreated = false;
+        isPluginAttached = false;
+        pendingUsername = null;
     }
 
     private String generateTransactionId() {
-        return "txn-" + new Random().nextInt(1000000);
+        return "txn-" + UUID.randomUUID().toString().substring(0, 8);
     }
 
     private void createSession() {
@@ -77,8 +145,10 @@ public class JanusWebSocketClient extends WebSocketClient {
             create.put("janus", "create");
             create.put("transaction", generateTransactionId());
             send(create.toString());
+            Log.d(TAG, "Sent create session request");
         } catch (JSONException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Error creating session request", e);
+            listener.onJanusError("Error creating session: " + e.getMessage());
         }
     }
 
@@ -86,16 +156,24 @@ public class JanusWebSocketClient extends WebSocketClient {
         try {
             JSONObject attach = new JSONObject();
             attach.put("janus", "attach");
-            attach.put("plugin", "janus.plugin.videocall");
-            attach.put("session_id", sessionId);
+            attach.put("plugin", "janus.plugin.videocall"); // Using videoroom plugin
+            attach.put("session_id", Long.parseLong(sessionId));
             attach.put("transaction", generateTransactionId());
+            Log.e("Plugin Data", attach.toString());
             send(attach.toString());
+            Log.d(TAG, "Sent attach plugin request");
         } catch (JSONException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Error creating attach request", e);
+            listener.onJanusError("Error attaching plugin: " + e.getMessage());
         }
     }
 
     public void register(String username) {
+        if (!isPluginAttached) {
+            pendingUsername = username;
+            return;
+        }
+
         try {
             JSONObject register = new JSONObject();
             register.put("janus", "message");
@@ -109,8 +187,10 @@ public class JanusWebSocketClient extends WebSocketClient {
 
             register.put("body", body);
             send(register.toString());
+            Log.d(TAG, "Sent register request for username: " + username);
         } catch (JSONException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Error creating register request", e);
+            listener.onJanusError("Error registering: " + e.getMessage());
         }
     }
 
@@ -131,8 +211,10 @@ public class JanusWebSocketClient extends WebSocketClient {
                 call.put("jsep", jsep);
             }
             send(call.toString());
+            Log.d(TAG, "Sent call request to: " + peerUsername);
         } catch (JSONException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Error creating call request", e);
+            listener.onJanusError("Error calling: " + e.getMessage());
         }
     }
 
@@ -149,8 +231,10 @@ public class JanusWebSocketClient extends WebSocketClient {
 
             hangup.put("body", body);
             send(hangup.toString());
+            Log.d(TAG, "Sent hangup request");
         } catch (JSONException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Error creating hangup request", e);
+            listener.onJanusError("Error hanging up: " + e.getMessage());
         }
     }
 
@@ -163,8 +247,10 @@ public class JanusWebSocketClient extends WebSocketClient {
             trickle.put("candidate", candidate);
             trickle.put("transaction", generateTransactionId());
             send(trickle.toString());
+            Log.d(TAG, "Sent trickle candidate");
         } catch (JSONException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Error creating trickle request", e);
+            listener.onJanusError("Error sending ICE candidate: " + e.getMessage());
         }
     }
 }

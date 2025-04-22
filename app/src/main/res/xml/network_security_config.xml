@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+<!--            <certificates src="@raw/nginx_newssl"/>-->
+<!--            <certificates src="@raw/nginx_selfsigned2"/>-->
+<!--            <certificates src="@raw/sslcrt"/>-->
+<!--            <certificates src="@raw/cert2"/>-->
+<!--            <certificates src="@raw/nginx_selfsigned_home"/>-->
+<!--            <certificates src="@raw/janus1"/>-->
+<!--            <certificates src="@raw/janusown"/>-->
+            <certificates src="@raw/domain"/>
+<!--            <certificates src="@raw/janusactualcert"/>-->
+<!--            <certificates src="@raw/authentic"/>-->
+<!--            <certificates src="@raw/janusvm"/>-->
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+<!--        <domain includeSubdomains="true">36.255.71.143</domain>-->
+<!--        <domain includeSubdomains="true">103.248.13.76</domain>-->
+<!--        <domain includeSubdomains="true">103.248.13.73</domain>-->
+<!--        <domain includeSubdomains="true">103.209.42.15</domain>-->
+<!--            <domain includeSubdomains="true">36.255.68.143</domain>-->
+        <domain includeSubdomains="true">janus.hobenaki.com</domain>
+<!--        <domain includeSubdomains="true">janus.hobenaki.com</domain>-->
+    </domain-config>
+</network-security-config>

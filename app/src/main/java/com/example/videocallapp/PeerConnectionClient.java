@@ -3,8 +3,6 @@ package com.example.videocallapp;
 import android.content.Context;
 import android.util.Log;
 
-import com.google.gson.Gson;
-
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.webrtc.AudioSource;
@@ -34,19 +32,18 @@ import java.util.List;
 
 public class PeerConnectionClient {
     private static final String TAG = "PeerConnectionClient";
+    private static EglBase eglBase;
 
     private PeerConnectionFactory factory;
     private PeerConnection peerConnection;
     private VideoCapturer videoCapturer;
     private SurfaceTextureHelper surfaceTextureHelper;
     private MediaStream localStream;
-    private EglBase eglBase;
-
-    private JanusWebSocketClient webSocketClient;
-    private Context context;
-
-    private SurfaceViewRenderer localVideoView;
-    private SurfaceViewRenderer remoteVideoView;
+    private final Context context;
+    private final JanusWebSocketClient webSocketClient;
+    private final SurfaceViewRenderer localVideoView;
+    private final SurfaceViewRenderer remoteVideoView;
+    private final PeerConnectionListener listener;
 
     public interface PeerConnectionListener {
         void onLocalStream(MediaStream stream);
@@ -56,7 +53,13 @@ public class PeerConnectionClient {
         void onError(String error);
     }
 
-    private PeerConnectionListener listener;
+    static {
+        eglBase = EglBase.create();
+    }
+
+    public static EglBase getEglBase() {
+        return eglBase;
+    }
 
     public PeerConnectionClient(Context context, JanusWebSocketClient webSocketClient,
                                 SurfaceViewRenderer localVideoView, SurfaceViewRenderer remoteVideoView,
@@ -67,7 +70,6 @@ public class PeerConnectionClient {
         this.remoteVideoView = remoteVideoView;
         this.listener = listener;
 
-        eglBase = EglBase.create();
         initializePeerConnectionFactory();
     }
 
@@ -95,9 +97,11 @@ public class PeerConnectionClient {
     public void createPeerConnection() {
         List<PeerConnection.IceServer> iceServers = new ArrayList<>();
         iceServers.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer());
+        // Add additional ICE servers if needed
 
         PeerConnection.RTCConfiguration rtcConfig = new PeerConnection.RTCConfiguration(iceServers);
         rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
+        rtcConfig.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY;
 
         peerConnection = factory.createPeerConnection(rtcConfig, new PeerConnection.Observer() {
             @Override
@@ -185,37 +189,50 @@ public class PeerConnectionClient {
         // Create video source and track
         VideoSource videoSource = factory.createVideoSource(videoCapturer.isScreencast());
         videoCapturer.initialize(surfaceTextureHelper, context, videoSource.getCapturerObserver());
+        videoCapturer.startCapture(640, 480, 30);
+
         VideoTrack videoTrack = factory.createVideoTrack("ARDAMSv0", videoSource);
 
         // Create audio track
         AudioSource audioSource = factory.createAudioSource(new MediaConstraints());
         AudioTrack audioTrack = factory.createAudioTrack("ARDAMSa0", audioSource);
 
+        // Create local stream
         localStream = factory.createLocalMediaStream("ARDAMS");
         localStream.addTrack(videoTrack);
         localStream.addTrack(audioTrack);
 
-        localVideoView.init(eglBase.getEglBaseContext(), null);
+        // Add stream to peer connection
+        if (peerConnection != null) {
+            peerConnection.addStream(localStream);
+        }
+
+        // Setup local video view
         videoTrack.addSink(localVideoView);
-
         listener.onLocalStream(localStream);
-
-        videoCapturer.startCapture(640, 480, 30);
     }
 
     private VideoCapturer createCameraCapturer() {
         Camera2Enumerator enumerator = new Camera2Enumerator(context);
         String[] deviceNames = enumerator.getDeviceNames();
 
+        // Try to find front-facing camera first
         for (String deviceName : deviceNames) {
             if (enumerator.isFrontFacing(deviceName)) {
-                return enumerator.createCapturer(deviceName, null);
+                CameraVideoCapturer videoCapturer = enumerator.createCapturer(deviceName, null);
+                if (videoCapturer != null) {
+                    return videoCapturer;
+                }
             }
         }
 
+        // Fall back to any available camera
         for (String deviceName : deviceNames) {
             if (!enumerator.isFrontFacing(deviceName)) {
-                return enumerator.createCapturer(deviceName, null);
+                CameraVideoCapturer videoCapturer = enumerator.createCapturer(deviceName, null);
+                if (videoCapturer != null) {
+                    return videoCapturer;
+                }
             }
         }
 
@@ -383,11 +400,11 @@ public class PeerConnectionClient {
         if (videoCapturer != null) {
             try {
                 videoCapturer.stopCapture();
+                videoCapturer.dispose();
+                videoCapturer = null;
             } catch (InterruptedException e) {
                 Log.e(TAG, "Error stopping video capture", e);
             }
-            videoCapturer.dispose();
-            videoCapturer = null;
         }
 
         if (surfaceTextureHelper != null) {
@@ -403,16 +420,6 @@ public class PeerConnectionClient {
         if (peerConnection != null) {
             peerConnection.close();
             peerConnection = null;
-        }
-
-        if (localVideoView != null) {
-            localVideoView.release();
-            localVideoView = null;
-        }
-
-        if (remoteVideoView != null) {
-            remoteVideoView.release();
-            remoteVideoView = null;
         }
     }
 }
