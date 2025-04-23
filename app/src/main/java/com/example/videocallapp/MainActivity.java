@@ -47,7 +47,7 @@ public class MainActivity extends AppCompatActivity implements JanusWebSocketCli
     private SurfaceViewRenderer localVideoView;
     private SurfaceViewRenderer remoteVideoView;
 
-    private String currentUsername;
+    public static String currentUsername;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {

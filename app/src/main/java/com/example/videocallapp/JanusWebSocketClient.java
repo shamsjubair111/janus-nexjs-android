@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit;
 
 public class JanusWebSocketClient extends WebSocketClient {
     private static final String TAG = "JanusWebSocketClient";
-    private static final int CONNECTION_TIMEOUT = 10000; // 10 seconds timeout
+    private static final int CONNECTION_TIMEOUT = 40000; // 10 seconds timeout
     private static boolean alreadySent = false;
 
     public interface JanusListener {
@@ -26,8 +26,8 @@ public class JanusWebSocketClient extends WebSocketClient {
     }
 
     private JanusListener listener;
-    private String sessionId;
-    private String handleId;
+    private long sessionId;
+    private long handleId;
     private String pendingUsername;
     private boolean isSessionCreated = false;
     private boolean isPluginAttached = false;
@@ -35,7 +35,7 @@ public class JanusWebSocketClient extends WebSocketClient {
     public JanusWebSocketClient(URI serverUri, JanusListener listener, Map<String, String> httpHeaders) {
         super(serverUri, httpHeaders);
         this.listener = listener;
-        setConnectionLostTimeout(30); // 60 seconds ping interval
+        setConnectionLostTimeout(20); // 60 seconds ping interval
     }
 
     @Override
@@ -77,24 +77,20 @@ public class JanusWebSocketClient extends WebSocketClient {
 
     private void handleSuccessResponse(JSONObject json) throws JSONException {
         if (json.has("data") && json.getJSONObject("data").has("id")) {
-            // Session created successfully
-            sessionId = json.getJSONObject("data").getString("id");
-            isSessionCreated = true;
-            Log.d(TAG, "Session created: " + sessionId);
-            if(!alreadySent){
-                attachPlugin(); // Proceed to attach plugin
-                alreadySent = true;
-            }
-
-        } else if (json.has("plugindata")) {
-            // Plugin attached successfully
-            JSONObject plugindata = json.getJSONObject("plugindata");
-            if (plugindata.getJSONObject("data").has("id")) {
-                handleId = plugindata.getJSONObject("data").getString("id");
+            if (!json.has("session_id")) {
+                // This is a session creation response
+                sessionId = json.getJSONObject("data").getLong("id");
+                isSessionCreated = true;
+                Log.d(TAG, "Session created: " + sessionId);
+                attachPlugin();
+            } else {
+                // This is a plugin attach response
+                handleId = json.getJSONObject("data").getLong("id");
                 isPluginAttached = true;
                 Log.d(TAG, "Plugin attached, handle ID: " + handleId);
+                pendingUsername = MainActivity.currentUsername;
                 if (pendingUsername != null) {
-                    register(pendingUsername); // Process pending registration
+                    register(pendingUsername);
                     pendingUsername = null;
                 }
             }
@@ -128,8 +124,8 @@ public class JanusWebSocketClient extends WebSocketClient {
     }
 
     private void resetState() {
-        sessionId = null;
-        handleId = null;
+        sessionId = 0;
+        handleId = 0;
         isSessionCreated = false;
         isPluginAttached = false;
         pendingUsername = null;
@@ -157,7 +153,7 @@ public class JanusWebSocketClient extends WebSocketClient {
             JSONObject attach = new JSONObject();
             attach.put("janus", "attach");
             attach.put("plugin", "janus.plugin.videocall"); // Using videoroom plugin
-            attach.put("session_id", Long.parseLong(sessionId));
+            attach.put("session_id", sessionId);
             attach.put("transaction", generateTransactionId());
             Log.e("Plugin Data", attach.toString());
             send(attach.toString());

@@ -356,6 +356,7 @@ public class PeerConnectionClient {
                             accept.put("jsep", jsep);
 
                             webSocketClient.send(accept.toString());
+                            Log.e("Reply sdp",accept.toString());
                         } catch (JSONException e) {
                             Log.e(TAG, "Error creating answer JSEP", e);
                         }
