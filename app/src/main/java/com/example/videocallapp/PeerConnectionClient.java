@@ -19,6 +19,7 @@ import org.webrtc.MediaStream;
 import org.webrtc.PeerConnection;
 import org.webrtc.PeerConnectionFactory;
 import org.webrtc.RtpReceiver;
+import org.webrtc.RtpSender;
 import org.webrtc.SdpObserver;
 import org.webrtc.SessionDescription;
 import org.webrtc.SurfaceTextureHelper;
@@ -28,6 +29,7 @@ import org.webrtc.VideoSource;
 import org.webrtc.VideoTrack;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class PeerConnectionClient {
@@ -97,7 +99,6 @@ public class PeerConnectionClient {
     public void createPeerConnection() {
         List<PeerConnection.IceServer> iceServers = new ArrayList<>();
         iceServers.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer());
-        // Add additional ICE servers if needed
 
         PeerConnection.RTCConfiguration rtcConfig = new PeerConnection.RTCConfiguration(iceServers);
         rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
@@ -145,8 +146,8 @@ public class PeerConnectionClient {
 
             @Override
             public void onAddStream(MediaStream mediaStream) {
-                Log.d(TAG, "onAddStream: " + mediaStream.getId());
-                listener.onRemoteStream(mediaStream);
+                // Deprecated in Unified Plan - kept for backward compatibility
+                Log.d(TAG, "onAddStream (deprecated): " + mediaStream.getId());
             }
 
             @Override
@@ -167,6 +168,13 @@ public class PeerConnectionClient {
             @Override
             public void onAddTrack(RtpReceiver rtpReceiver, MediaStream[] mediaStreams) {
                 Log.d(TAG, "onAddTrack");
+                if (rtpReceiver.track() instanceof VideoTrack) {
+                    VideoTrack remoteVideoTrack = (VideoTrack) rtpReceiver.track();
+                    remoteVideoTrack.addSink(remoteVideoView);
+                    if (mediaStreams != null && mediaStreams.length > 0) {
+                        listener.onRemoteStream(mediaStreams[0]);
+                    }
+                }
             }
 
             @Override
@@ -186,26 +194,23 @@ public class PeerConnectionClient {
 
         surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.getEglBaseContext());
 
-        // Create video source and track
         VideoSource videoSource = factory.createVideoSource(videoCapturer.isScreencast());
         videoCapturer.initialize(surfaceTextureHelper, context, videoSource.getCapturerObserver());
         videoCapturer.startCapture(640, 480, 30);
 
         VideoTrack videoTrack = factory.createVideoTrack("ARDAMSv0", videoSource);
-
-        // Create audio track
         AudioSource audioSource = factory.createAudioSource(new MediaConstraints());
         AudioTrack audioTrack = factory.createAudioTrack("ARDAMSa0", audioSource);
 
-        // Create local stream
+        // Create local stream for UI rendering
         localStream = factory.createLocalMediaStream("ARDAMS");
         localStream.addTrack(videoTrack);
         localStream.addTrack(audioTrack);
 
-        // Add stream to peer connection
-        if (peerConnection != null) {
-            peerConnection.addStream(localStream);
-        }
+        // Add tracks to peer connection (Unified Plan compatible)
+        List<String> streamIds = Collections.singletonList("ARDAMS");
+        peerConnection.addTrack(videoTrack, streamIds);
+        peerConnection.addTrack(audioTrack, streamIds);
 
         // Setup local video view
         videoTrack.addSink(localVideoView);
@@ -397,14 +402,23 @@ public class PeerConnectionClient {
     }
 
     public void close() {
+        if (peerConnection != null) {
+            // Remove all tracks first
+            for (RtpSender sender : peerConnection.getSenders()) {
+                peerConnection.removeTrack(sender);
+            }
+            peerConnection.close();
+            peerConnection = null;
+        }
+
         if (videoCapturer != null) {
             try {
                 videoCapturer.stopCapture();
                 videoCapturer.dispose();
-                videoCapturer = null;
             } catch (InterruptedException e) {
                 Log.e(TAG, "Error stopping video capture", e);
             }
+            videoCapturer = null;
         }
 
         if (surfaceTextureHelper != null) {
@@ -415,11 +429,6 @@ public class PeerConnectionClient {
         if (localStream != null) {
             localStream.dispose();
             localStream = null;
-        }
-
-        if (peerConnection != null) {
-            peerConnection.close();
-            peerConnection = null;
         }
     }
 }
