@@ -15,8 +15,7 @@ import java.util.concurrent.TimeUnit;
 
 public class JanusWebSocketClient extends WebSocketClient {
     private static final String TAG = "JanusWebSocketClient";
-    private static final int CONNECTION_TIMEOUT = 40000; // 10 seconds timeout
-    private static boolean alreadySent = false;
+    private static final int CONNECTION_TIMEOUT = 10000; // 10 seconds timeout
 
     public interface JanusListener {
         void onJanusConnected();
@@ -35,14 +34,14 @@ public class JanusWebSocketClient extends WebSocketClient {
     public JanusWebSocketClient(URI serverUri, JanusListener listener, Map<String, String> httpHeaders) {
         super(serverUri, httpHeaders);
         this.listener = listener;
-        setConnectionLostTimeout(20); // 60 seconds ping interval
+        setConnectionLostTimeout(30);
     }
 
     @Override
     public void onOpen(ServerHandshake handshakedata) {
         Log.d(TAG, "WebSocket connected, handshake: " + handshakedata.getHttpStatus());
         listener.onJanusConnected();
-        createSession(); // Start Janus session creation
+        createSession();
     }
 
     @Override
@@ -50,8 +49,8 @@ public class JanusWebSocketClient extends WebSocketClient {
         Log.d(TAG, "Received: " + message);
         try {
             JSONObject json = new JSONObject(message);
-            processJanusMessage(json); // Process all Janus messages
-            listener.onJanusEvent(json); // Forward to listener
+            processJanusMessage(json);
+            listener.onJanusEvent(json);
         } catch (JSONException e) {
             listener.onJanusError("JSON parsing error: " + e.getMessage());
         }
@@ -63,14 +62,12 @@ public class JanusWebSocketClient extends WebSocketClient {
         String janus = json.getString("janus");
         switch (janus) {
             case "success":
-                Log.e("Janus Debug",json.toString());
                 handleSuccessResponse(json);
                 break;
             case "error":
                 handleErrorResponse(json);
                 break;
             case "event":
-                // Events are handled by the listener
                 break;
         }
     }
@@ -78,20 +75,16 @@ public class JanusWebSocketClient extends WebSocketClient {
     private void handleSuccessResponse(JSONObject json) throws JSONException {
         if (json.has("data") && json.getJSONObject("data").has("id")) {
             if (!json.has("session_id")) {
-                // This is a session creation response
                 sessionId = json.getJSONObject("data").getLong("id");
                 isSessionCreated = true;
                 Log.d(TAG, "Session created: " + sessionId);
                 attachPlugin();
             } else {
-                // This is a plugin attach response
                 handleId = json.getJSONObject("data").getLong("id");
                 isPluginAttached = true;
                 Log.d(TAG, "Plugin attached, handle ID: " + handleId);
-                pendingUsername = MainActivity.currentUsername;
-                if (pendingUsername != null) {
-                    register(pendingUsername);
-                    pendingUsername = null;
+                if (MainActivity.currentUsername != null) {
+                    register(MainActivity.currentUsername);
                 }
             }
         }
@@ -131,8 +124,16 @@ public class JanusWebSocketClient extends WebSocketClient {
         pendingUsername = null;
     }
 
-    private String generateTransactionId() {
+    public String generateTransactionId() {
         return "txn-" + UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    public long getSessionId() {
+        return sessionId;
+    }
+
+    public long getHandleId() {
+        return handleId;
     }
 
     private void createSession() {
@@ -152,10 +153,9 @@ public class JanusWebSocketClient extends WebSocketClient {
         try {
             JSONObject attach = new JSONObject();
             attach.put("janus", "attach");
-            attach.put("plugin", "janus.plugin.videocall"); // Using videoroom plugin
+            attach.put("plugin", "janus.plugin.videocall");
             attach.put("session_id", sessionId);
             attach.put("transaction", generateTransactionId());
-            Log.e("Plugin Data", attach.toString());
             send(attach.toString());
             Log.d(TAG, "Sent attach plugin request");
         } catch (JSONException e) {
@@ -165,11 +165,6 @@ public class JanusWebSocketClient extends WebSocketClient {
     }
 
     public void register(String username) {
-        if (!isPluginAttached) {
-            pendingUsername = username;
-            return;
-        }
-
         try {
             JSONObject register = new JSONObject();
             register.put("janus", "message");
@@ -240,8 +235,8 @@ public class JanusWebSocketClient extends WebSocketClient {
             trickle.put("janus", "trickle");
             trickle.put("session_id", sessionId);
             trickle.put("handle_id", handleId);
-            trickle.put("candidate", candidate);
             trickle.put("transaction", generateTransactionId());
+            trickle.put("candidate", candidate);
             send(trickle.toString());
             Log.d(TAG, "Sent trickle candidate");
         } catch (JSONException e) {

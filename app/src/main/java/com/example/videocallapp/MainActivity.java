@@ -75,7 +75,8 @@ public class MainActivity extends AppCompatActivity implements JanusWebSocketCli
         // Initialize WebRTC video views
         localVideoView.init(PeerConnectionClient.getEglBase().getEglBaseContext(), null);
         remoteVideoView.init(PeerConnectionClient.getEglBase().getEglBaseContext(), null);
-        localVideoView.setMirror(true); // Mirror local video
+        localVideoView.setMirror(true);
+        remoteVideoView.setZOrderMediaOverlay(true);
     }
 
     private boolean isNetworkAvailable() {
@@ -135,7 +136,7 @@ public class MainActivity extends AppCompatActivity implements JanusWebSocketCli
         currentUsername = username;
         new Thread(() -> {
             try {
-                URI serverUri = new URI("wss://janus.hobenaki.com/"); // Updated endpoint
+                URI serverUri = new URI("wss://janus.hobenaki.com/");
                 Map<String, String> httpHeaders = new HashMap<>();
                 httpHeaders.put("Sec-WebSocket-Protocol", "janus-protocol");
 
@@ -183,13 +184,15 @@ public class MainActivity extends AppCompatActivity implements JanusWebSocketCli
             peerConnectionClient = null;
         }
 
-        statusTextView.setText("Call ended");
+        runOnUiThread(() -> {
+            statusTextView.setText("Call ended");
+            remoteVideoView.clearImage();
+        });
     }
 
     @Override
     public void onJanusConnected() {
         runOnUiThread(() -> statusTextView.setText("Connected to Janus server"));
-        // Session creation is handled automatically in WebSocketClient
     }
 
     @Override
@@ -229,6 +232,8 @@ public class MainActivity extends AppCompatActivity implements JanusWebSocketCli
                     }
                 } else if (janus.equals("webrtcup")) {
                     runOnUiThread(() -> statusTextView.setText("Call established"));
+                } else if (janus.equals("hangup")) {
+                    handleHangup();
                 } else if (janus.equals("trickle")) {
                     handleTrickleEvent(event);
                 }
@@ -245,9 +250,6 @@ public class MainActivity extends AppCompatActivity implements JanusWebSocketCli
                 break;
             case "accepted":
                 handleCallAccepted(event);
-                break;
-            case "hangup":
-                handleHangup();
                 break;
             default:
                 Log.d(TAG, "Unhandled event type: " + eventType);
@@ -324,7 +326,7 @@ public class MainActivity extends AppCompatActivity implements JanusWebSocketCli
 
     @Override
     public void onIceCandidate(IceCandidate candidate) {
-        // Handled by PeerConnectionClient directly
+        // Handled by PeerConnectionClient
     }
 
     @Override

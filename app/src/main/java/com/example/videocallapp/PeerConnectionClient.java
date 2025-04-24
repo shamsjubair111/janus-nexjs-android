@@ -146,7 +146,6 @@ public class PeerConnectionClient {
 
             @Override
             public void onAddStream(MediaStream mediaStream) {
-                // Deprecated in Unified Plan - kept for backward compatibility
                 Log.d(TAG, "onAddStream (deprecated): " + mediaStream.getId());
             }
 
@@ -202,17 +201,14 @@ public class PeerConnectionClient {
         AudioSource audioSource = factory.createAudioSource(new MediaConstraints());
         AudioTrack audioTrack = factory.createAudioTrack("ARDAMSa0", audioSource);
 
-        // Create local stream for UI rendering
         localStream = factory.createLocalMediaStream("ARDAMS");
         localStream.addTrack(videoTrack);
         localStream.addTrack(audioTrack);
 
-        // Add tracks to peer connection (Unified Plan compatible)
         List<String> streamIds = Collections.singletonList("ARDAMS");
         peerConnection.addTrack(videoTrack, streamIds);
         peerConnection.addTrack(audioTrack, streamIds);
 
-        // Setup local video view
         videoTrack.addSink(localVideoView);
         listener.onLocalStream(localStream);
     }
@@ -221,7 +217,6 @@ public class PeerConnectionClient {
         Camera2Enumerator enumerator = new Camera2Enumerator(context);
         String[] deviceNames = enumerator.getDeviceNames();
 
-        // Try to find front-facing camera first
         for (String deviceName : deviceNames) {
             if (enumerator.isFrontFacing(deviceName)) {
                 CameraVideoCapturer videoCapturer = enumerator.createCapturer(deviceName, null);
@@ -231,7 +226,6 @@ public class PeerConnectionClient {
             }
         }
 
-        // Fall back to any available camera
         for (String deviceName : deviceNames) {
             if (!enumerator.isFrontFacing(deviceName)) {
                 CameraVideoCapturer videoCapturer = enumerator.createCapturer(deviceName, null);
@@ -352,11 +346,14 @@ public class PeerConnectionClient {
 
                             JSONObject accept = new JSONObject();
                             accept.put("janus", "message");
+                            accept.put("session_id", webSocketClient.getSessionId());
+                            accept.put("handle_id", webSocketClient.getHandleId());
+                            accept.put("transaction", webSocketClient.generateTransactionId());
                             accept.put("body", body);
                             accept.put("jsep", jsep);
 
                             webSocketClient.send(accept.toString());
-                            Log.e("Reply sdp",accept.toString());
+                            Log.d(TAG, "Sent answer SDP: " + accept.toString());
                         } catch (JSONException e) {
                             Log.e(TAG, "Error creating answer JSEP", e);
                         }
@@ -404,7 +401,6 @@ public class PeerConnectionClient {
 
     public void close() {
         if (peerConnection != null) {
-            // Remove all tracks first
             for (RtpSender sender : peerConnection.getSenders()) {
                 peerConnection.removeTrack(sender);
             }
